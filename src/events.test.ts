@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import fs from 'node:fs';
-import { getEventContext, clearEvents } from './events.js';
+import { getEventContext, clearEvents, deriveSessionKey } from './events.js';
 
 vi.mock('node:fs', () => ({
   default: {
@@ -15,6 +15,10 @@ const mockWriteFileSync = vi.mocked(fs.writeFileSync);
 
 function setEvents(events: Array<{ type: string; detail: string; ok: boolean; ts: number }>) {
   mockReadFileSync.mockReturnValue(JSON.stringify({ events }));
+}
+
+function setEventsFile(data: Record<string, unknown>) {
+  mockReadFileSync.mockReturnValue(JSON.stringify(data));
 }
 
 function makeEvent(type: string, detail: string, ok = true, ageMs = 0) {
@@ -425,12 +429,114 @@ describe('getEventContext', () => {
   });
 });
 
+describe('monotonic milestone counters', () => {
+  // The events file is trimmed to 50 entries by the hook, so milestones are
+  // based on the persisted totalCount/totalEditCount counters — file-length
+  // saturation must never make 'many_actions' permanently true.
+  const cappedOthers = Array.from({ length: 50 }, (_, i) =>
+    makeEvent('other', `tool${i}`, true, (50 - i) * 100));
+
+  it('does not fire many_actions just because the file sits at the 50-event cap', () => {
+    setEventsFile({ events: cappedOthers, totalCount: 73, totalEditCount: 0 });
+    const ctx = getEventContext();
+    expect(ctx.category).toBeNull();
+    expect(ctx.sessionActionCount).toBe(73);
+  });
+
+  it('fires many_actions when the monotonic counter crosses a multiple of 50', () => {
+    setEventsFile({ events: cappedOthers, totalCount: 100, totalEditCount: 0 });
+    expect(getEventContext().category).toBe('many_actions');
+  });
+
+  it('fires many_edits only when the latest event is an edit', () => {
+    setEventsFile({
+      events: [makeEvent('read', 'x.ts', true, 90000), makeEvent('other', 'tool', true, 1000)],
+      totalCount: 30, totalEditCount: 25,
+    });
+    expect(getEventContext().category).toBeNull();
+
+    setEventsFile({
+      events: [makeEvent('read', 'x.ts', true, 90000), makeEvent('edit', 'a.ts', true, 1000)],
+      totalCount: 30, totalEditCount: 25,
+    });
+    expect(getEventContext().category).toBe('many_edits');
+  });
+
+  it('bases first_action on the monotonic counter, not visible file length', () => {
+    // File was trimmed/session is old — a lone visible event is not the first action
+    setEventsFile({ events: [makeEvent('bash', 'echo hello', true)], totalCount: 12 });
+    expect(getEventContext().category).toBeNull();
+  });
+
+  it('reports counts from legacy files without counters', () => {
+    setEvents([makeEvent('edit', 'a.ts'), makeEvent('write', 'b.ts'), makeEvent('read', 'c.ts')]);
+    const ctx = getEventContext();
+    expect(ctx.sessionActionCount).toBe(3);
+    expect(ctx.sessionEditCount).toBe(2);
+  });
+});
+
+describe('clearedAt watermark', () => {
+  it('ignores events at or before clearedAt (cleared events never resurrect)', () => {
+    const now = Date.now();
+    setEventsFile({
+      events: [{ type: 'bash', detail: 'npm test', ok: false, ts: now - 5000 }],
+      clearedAt: now - 3000,
+    });
+    const ctx = getEventContext();
+    expect(ctx.freshness).toBe('none');
+    expect(ctx.category).toBeNull();
+  });
+
+  it('keeps only post-clear events', () => {
+    const now = Date.now();
+    setEventsFile({
+      events: [
+        { type: 'bash', detail: 'stale failure', ok: false, ts: now - 5000 },
+        { type: 'bash', detail: 'git commit -m "x"', ok: true, ts: now - 1000 },
+      ],
+      clearedAt: now - 3000,
+    });
+    const ctx = getEventContext();
+    expect(ctx.sessionActionCount).toBe(1);
+    expect(ctx.consecutiveFailures).toBe(0);
+    expect(ctx.category).toBe('first_action');
+  });
+});
+
 describe('clearEvents', () => {
-  it('writes empty events to file', () => {
+  it('writes an empty per-session events file with a clearedAt watermark', () => {
     clearEvents();
     expect(mockWriteFileSync).toHaveBeenCalledWith(
-      expect.stringContaining('events.json'),
-      JSON.stringify({ events: [] }),
+      expect.stringContaining('events-default.json'),
+      expect.stringContaining('"events":[]'),
     );
+    const written = String(mockWriteFileSync.mock.calls[0][1]);
+    expect(JSON.parse(written).clearedAt).toBeGreaterThan(0);
+  });
+
+  it('targets the given session key', () => {
+    clearEvents('abc123');
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      expect.stringContaining('events-abc123.json'),
+      expect.any(String),
+    );
+  });
+});
+
+describe('deriveSessionKey', () => {
+  it('is stable for the same transcript path', () => {
+    expect(deriveSessionKey('/tmp/a.jsonl')).toBe(deriveSessionKey('/tmp/a.jsonl'));
+  });
+
+  it('differs across transcript paths', () => {
+    expect(deriveSessionKey('/tmp/a.jsonl')).not.toBe(deriveSessionKey('/tmp/b.jsonl'));
+  });
+
+  it('falls back to session id, then the stable default', () => {
+    expect(deriveSessionKey(undefined, 'sess-1')).toBe(deriveSessionKey(undefined, 'sess-1'));
+    expect(deriveSessionKey(undefined, 'sess-1')).not.toBe('default');
+    expect(deriveSessionKey(undefined, undefined)).toBe('default');
+    expect(deriveSessionKey('', '')).toBe('default');
   });
 });

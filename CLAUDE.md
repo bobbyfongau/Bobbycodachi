@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**codachi** — a tamagotchi pet that lives in the Claude Code statusline. Zero runtime dependencies, pure TypeScript compiled to ESM. Two binaries: `codachi` (statusline renderer, reads JSON from stdin → writes ANSI to stdout) and `codachi-hook` (PostToolExecution hook that records events to disk).
+**codachi** — a tamagotchi pet that lives in the Claude Code statusline. Zero runtime dependencies, pure TypeScript compiled to ESM. Two binaries: `codachi` (statusline renderer, reads JSON from stdin → writes ANSI to stdout) and `codachi-hook` (PostToolUse hook that records events to disk).
 
 ## Commands
 
@@ -33,12 +33,12 @@ Data flow — two independent processes sharing state on disk:
 ```
 Claude Code ──stdin JSON──▶ index.ts (renderer, p95 ~0.1ms) ──ANSI──▶ statusline
                 │
-                └──PostToolUse──▶ hook.ts ──▶ events.json ──▶ mood engine on next render
+                └──PostToolUse──▶ hook.ts ──▶ events-<key>.json ──▶ mood engine on next render
 ```
 
 The renderer never calls APIs and never blocks on I/O longer than a git status (cached 2s). The hook's only job is to classify a tool-use event and append it; it must stay fast and cannot assume the renderer is running. Events use an optimistic-concurrency generation counter to prevent lost updates from concurrent hooks.
 
-**State lives in** `~/.claude/plugins/codachi/` (session state, events, memory, error log) and `~/.config/codachi/config.json` (user config). All writes are atomic (write-tmp + rename) via `fs-utils.ts`. Pet identity is bound to `transcript_path` so each Claude session gets a stable species/palette.
+**State lives in** `~/.claude/plugins/codachi/` (per-session `state-<key>.json` / `events-<key>.json` keyed by a hash of `transcript_path` — falling back to `session_id`, then `default` — plus global `memory.json` and the error log) and `~/.config/codachi/config.json` (user config). All writes are atomic (write-tmp + rename) via `fs-utils.ts`. Per-session keying lets concurrent Claude Code windows coexist; session records older than 7 days are pruned on new-session init.
 
 **Key modules** (read these together to understand a change):
 - `index.ts` routes subcommands (`init`/`uninstall`/`demo`/`config`/`stats`/`plugins`) vs. default stdin render path
@@ -58,4 +58,4 @@ The renderer never calls APIs and never blocks on I/O longer than a git status (
 
 ## Testing
 
-Vitest, ~370 tests, ~79% line coverage. Tests sit next to sources (`*.test.ts`). Mood/events/state have the densest coverage — when touching message selection or event classification, extend the existing table-driven tests rather than adding new files. Set `FORCE_COLOR=3` at the top of any test file that imports from `render/colors.ts` to ensure truecolor mode in CI.
+Vitest, ~460 tests, ~79% line coverage. Tests sit next to sources (`*.test.ts`). Mood/events/state have the densest coverage — when touching message selection or event classification, extend the existing table-driven tests rather than adding new files. Set `FORCE_COLOR=3` at the top of any test file that imports from `render/colors.ts` to ensure truecolor mode in CI.

@@ -10,9 +10,6 @@
  * Override with FORCE_COLOR=0|1|2|3 (std convention) or CODACHI_COLOR=truecolor|256|16|none.
  */
 
-export const RESET = '\x1b[0m';
-export const DIM = '\x1b[2m';
-
 export type ColorLevel = 'truecolor' | 'ansi256' | 'ansi16' | 'none';
 
 function detectColorLevel(): ColorLevel {
@@ -60,6 +57,11 @@ function detectColorLevel(): ColorLevel {
 }
 
 export const COLOR_LEVEL: ColorLevel = detectColorLevel();
+
+// At level 'none' (NO_COLOR, TERM=dumb, CODACHI_COLOR=none, piped output)
+// every escape must vanish — RESET/DIM included — so output has no ANSI bytes.
+export const RESET = COLOR_LEVEL === 'none' ? '' : '\x1b[0m';
+export const DIM = COLOR_LEVEL === 'none' ? '' : '\x1b[2m';
 
 // ── RGB → level-appropriate SGR ─────────────────────
 

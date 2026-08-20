@@ -21,6 +21,9 @@ function makeMoodCtx(overrides: Record<string, unknown> = {}) {
     moodTick: 0,
     eventContext: noEvent,
     tierUpgraded: false,
+    // Mid-session by default so the welcome-back gate stays closed unless a
+    // test opts in with a small sessionTick.
+    sessionTick: 999,
     ...overrides,
   };
 }
@@ -217,17 +220,43 @@ describe('getMoodMessage', () => {
     expect(seen).toBe(true);
   });
 
-  // Welcome messages
-  it('shows welcome for stranger', () => {
-    const msg = getMoodMessage(makeMoodCtx({ moodTick: 0, relationshipTier: 'stranger' }));
-    expect(msg.toLowerCase()).toMatch(/new friend|nice to meet|welcome/);
+  // Welcome messages — gated on time since the session actually started
+  it('shows welcome for stranger at session start', () => {
+    const msg = getMoodMessage(makeMoodCtx({ moodTick: 0, sessionTick: 0, relationshipTier: 'stranger' }));
+    expect(msg.toLowerCase()).toMatch(/new friend|nice to meet|welcome|hello|human|waiting/);
   });
 
   it('shows welcome with session number for returning user', () => {
     const msg = getMoodMessage(makeMoodCtx({
-      moodTick: 0, relationshipTier: 'acquaintance', sessionNumber: 5,
+      moodTick: 0, sessionTick: 0, relationshipTier: 'acquaintance', sessionNumber: 5,
     }));
     expect(msg).toContain('#5');
+  });
+
+  it('shows welcome at session start regardless of the epoch tick', () => {
+    // Old bug: the gate was `moodTick % 60 < 2`, so a session starting at an
+    // arbitrary wall-clock time usually missed its greeting.
+    const msg = getMoodMessage(makeMoodCtx({
+      moodTick: 37, sessionTick: 0, relationshipTier: 'acquaintance', sessionNumber: 12,
+    }));
+    expect(msg).toContain('#12');
+  });
+
+  it('does NOT show welcome mid-session even on epoch tick multiples of 60', () => {
+    // Old bug: every 10 minutes of a long session hit the tick%60<2 window.
+    for (const tick of [0, 1, 60, 61, 120]) {
+      const msg = getMoodMessage(makeMoodCtx({
+        moodTick: tick, sessionTick: 999, relationshipTier: 'acquaintance', sessionNumber: 12,
+      }));
+      expect(msg).not.toContain('#12');
+    }
+  });
+
+  it('closes the welcome window after ~30s of session time', () => {
+    const open = getMoodMessage(makeMoodCtx({ moodTick: 0, sessionTick: 2, sessionNumber: 7 }));
+    expect(open).toContain('#7');
+    const closed = getMoodMessage(makeMoodCtx({ moodTick: 0, sessionTick: 3, sessionNumber: 7 }));
+    expect(closed).not.toContain('#7');
   });
 
   // File type messages from git

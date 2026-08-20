@@ -2,20 +2,131 @@
  * Event reader + classifier for codachi hooks system.
  * Reads events logged by the hook script and provides
  * classified context for the mood system.
+ *
+ * Events are stored PER SESSION: each Claude Code session gets its own
+ * events-<key>.json, where <key> is a short hash of the transcript path
+ * (falling back to the session id, then 'default'). This lets two
+ * concurrent Claude Code windows coexist without wiping each other's
+ * events. The file also carries monotonic totalCount / totalEditCount
+ * counters (unaffected by the 50-event trim) and a clearedAt watermark
+ * so a cleared file's contents can never be resurrected by a racing
+ * hook write.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { atomicWrite } from './fs-utils.js';
 import { logError } from './log.js';
 
-const EVENTS_FILE = path.join(os.homedir(), '.claude', 'plugins', 'codachi', 'events.json');
+const EVENTS_DIR = path.join(os.homedir(), '.claude', 'plugins', 'codachi');
 
 interface RawEvent {
   type: string;
   detail: string;
   ok: boolean;
   ts: number;
+}
+
+interface EventsFileData {
+  events?: RawEvent[];
+  totalCount?: number;
+  totalEditCount?: number;
+  clearedAt?: number;
+}
+
+export interface EventsFileState {
+  events: RawEvent[];
+  totalCount: number;
+  totalEditCount: number;
+  clearedAt: number;
+}
+
+// ── Session keying ──────────────────────────────────
+
+/**
+ * Stable per-session key: short hash of the transcript path (unique per
+ * Claude Code session), falling back to the session id, then 'default'.
+ * A missing transcript path must always map to the SAME key so a caller
+ * that omits it doesn't trigger a new-session reset on every render.
+ */
+export function deriveSessionKey(transcriptPath?: string, sessionId?: string): string {
+  const src = (transcriptPath && transcriptPath.trim()) || (sessionId && sessionId.trim()) || '';
+  if (!src) return 'default';
+  return crypto.createHash('sha256').update(src).digest('hex').slice(0, 12);
+}
+
+export function eventsFileFor(key: string): string {
+  return path.join(EVENTS_DIR, `events-${key}.json`);
+}
+
+// The statusline sets this once per invocation (from initSession) so
+// getEventContext() reads the current session's events without a
+// signature change for callers.
+let activeSessionKey = 'default';
+
+export function setActiveSessionKey(key: string): void {
+  activeSessionKey = key;
+}
+
+export function getActiveSessionKey(): string {
+  return activeSessionKey;
+}
+
+// ── Load events from disk ───────────────────────────
+
+function isValidEvent(e: unknown): e is RawEvent {
+  const ev = e as RawEvent | null;
+  return !!ev && typeof ev === 'object'
+    && typeof ev.type === 'string'
+    && typeof ev.ts === 'number' && Number.isFinite(ev.ts);
+}
+
+function countEdits(events: RawEvent[]): number {
+  return events.filter(e => e.type === 'edit' || e.type === 'write').length;
+}
+
+/**
+ * Read an events file, dropping any events at or before the clearedAt
+ * watermark (so pre-clear events are never resurrected) and floor-ing
+ * the monotonic counters at what the visible events imply (legacy files
+ * without counters still work).
+ */
+export function readEventsFile(file: string): EventsFileState {
+  const empty: EventsFileState = { events: [], totalCount: 0, totalEditCount: 0, clearedAt: 0 };
+  try {
+    const raw = fs.readFileSync(file, 'utf8');
+    const data = JSON.parse(raw) as EventsFileData;
+    const clearedAt = typeof data.clearedAt === 'number' && Number.isFinite(data.clearedAt) ? data.clearedAt : 0;
+    const all = Array.isArray(data.events) ? data.events.filter(isValidEvent) : [];
+    const events = clearedAt > 0 ? all.filter(e => e.ts > clearedAt) : all;
+    const rawTotal = Number(data.totalCount);
+    const rawEditTotal = Number(data.totalEditCount);
+    return {
+      events,
+      totalCount: Math.max(Number.isFinite(rawTotal) ? rawTotal : 0, events.length),
+      totalEditCount: Math.max(Number.isFinite(rawEditTotal) ? rawEditTotal : 0, countEdits(events)),
+      clearedAt,
+    };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+      logError('events.loadEvents', err);
+    }
+    return empty;
+  }
+}
+
+/** Clear the session's events file — used when a session key is reused
+ * (e.g. the fallback key) to prevent cross-session bleed. The clearedAt
+ * watermark guarantees pre-clear events stay dead even if a racing hook
+ * write briefly resurrects them on disk. */
+export function clearEvents(key: string = activeSessionKey): void {
+  atomicWrite(eventsFileFor(key), JSON.stringify({
+    events: [],
+    totalCount: 0,
+    totalEditCount: 0,
+    clearedAt: Date.now(),
+  }));
 }
 
 export type EventCategory =
@@ -50,26 +161,6 @@ export interface EventContext {
   consecutiveFailures: number;
   sessionEditCount: number;
   sessionActionCount: number;
-}
-
-// ── Load events from disk ───────────────────────────
-
-function loadEvents(): RawEvent[] {
-  try {
-    const raw = fs.readFileSync(EVENTS_FILE, 'utf8');
-    const data = JSON.parse(raw) as { events?: RawEvent[] };
-    return Array.isArray(data.events) ? data.events : [];
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
-      logError('events.loadEvents', err);
-    }
-    return [];
-  }
-}
-
-/** Clear events file — called on new session to prevent cross-session bleed. */
-export function clearEvents(): void {
-  atomicWrite(EVENTS_FILE, JSON.stringify({ events: [] }));
 }
 
 // ── Classify a bash command ─────────────────────────
@@ -145,7 +236,7 @@ function classifyFile(filename: string): EventCategory {
 // ── Main classification ─────────────────────────────
 
 export function getEventContext(): EventContext {
-  const events = loadEvents();
+  const { events, totalCount, totalEditCount } = readEventsFile(eventsFileFor(activeSessionKey));
   const now = Date.now();
 
   const noEvents: EventContext = {
@@ -158,9 +249,6 @@ export function getEventContext(): EventContext {
   };
 
   if (events.length === 0) return noEvents;
-
-  // Count edits + actions
-  const editCount = events.filter(e => e.type === 'edit' || e.type === 'write').length;
 
   // Count consecutive bash failures from the end
   let consecutiveFailures = 0;
@@ -184,8 +272,8 @@ export function getEventContext(): EventContext {
     freshness,
     detail: latest.detail,
     consecutiveFailures,
-    sessionEditCount: editCount,
-    sessionActionCount: events.length,
+    sessionEditCount: totalEditCount,
+    sessionActionCount: totalCount,
   };
 
   // ── Pattern detection (highest priority) ──
@@ -223,16 +311,19 @@ export function getEventContext(): EventContext {
     return ctx;
   }
 
-  // Milestones
-  if (events.length === 1) {
+  // Milestones — based on MONOTONIC counters (unaffected by the 50-event
+  // file trim), so 'many_actions' fires only when the latest event crossed
+  // a multiple, never permanently once the file saturates at the cap.
+  if (totalCount === 1) {
     ctx.category = 'first_action';
     return ctx;
   }
-  if (editCount > 0 && editCount % 25 === 0) {
+  if (totalEditCount > 0 && totalEditCount % 25 === 0
+    && (latest.type === 'edit' || latest.type === 'write')) {
     ctx.category = 'many_edits';
     return ctx;
   }
-  if (events.length % 50 === 0) {
+  if (totalCount >= 50 && totalCount % 50 === 0) {
     ctx.category = 'many_actions';
     return ctx;
   }

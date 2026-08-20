@@ -2,7 +2,7 @@
 import { readStdin, getContextPercent, getModelName, getFiveHourUsage, getSevenDayUsage, getTokenSummary, getSessionCost } from './stdin.js';
 import { getGitStatus } from './git.js';
 import { getAnimalType, getPetColors } from './identity.js';
-import { initSession, animTick, moodTick, recordContextPercent, getContextVelocity, getContextTimeRemaining, getMemory, getRelationshipTier, didTierUpgrade } from './state.js';
+import { initSession, animTick, moodTick, sessionAgeTick, recordContextPercent, getContextVelocity, getContextTimeRemaining, getMemory, getRelationshipTier, didTierUpgrade } from './state.js';
 import { loadConfig, getConfig } from './config.js';
 import { getEventContext } from './events.js';
 import { getAnimalName } from './animals/index.js';
@@ -66,7 +66,7 @@ async function main(): Promise<void> {
     }
 
     loadConfig();
-    initSession(stdin.transcript_path);
+    initSession(stdin.transcript_path, stdin.session_id);
 
     const cfg = getConfig();
     const contextPercent = getContextPercent(stdin);
@@ -90,6 +90,7 @@ async function main(): Promise<void> {
       sessionNumber: getMemory().totalSessions,
       animTick: animTick(cfg.animationSpeed),
       moodTick: moodTick(),
+      sessionTick: sessionAgeTick(),
       eventContext: getEventContext(),
       petName,
       contextTimeRemaining: cfg.showVelocity !== false ? getContextTimeRemaining(contextPercent) : null,

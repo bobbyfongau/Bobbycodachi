@@ -30,13 +30,56 @@ interface State {
   animalIndex?: number;
   paletteIndex?: number;
   sessionStart?: number;
+  lastActive?: number;
   transcriptPath?: string;
 }
 interface Event { type: string; detail: string; ok: boolean; ts: number; }
+interface EventsFile { events?: Event[]; clearedAt?: number; }
 
 function readJSON<T>(file: string): T | null {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')) as T; }
   catch { return null; }
+}
+
+function listDataFiles(pattern: RegExp): string[] {
+  try {
+    return fs.readdirSync(STATE_DIR)
+      .filter(n => pattern.test(n))
+      .map(n => path.join(STATE_DIR, n));
+  } catch { return []; }
+}
+
+/** Most recently active session record (per-session state files, with the
+ * legacy single state.json as a fallback for old installs). */
+function loadCurrentSession(): State | null {
+  const candidates: State[] = [];
+  for (const file of listDataFiles(/^state-.+\.json$/)) {
+    const s = readJSON<State>(file);
+    if (s && typeof s.sessionStart === 'number') candidates.push(s);
+  }
+  const legacy = readJSON<State>(STATE_FILE);
+  if (legacy && typeof legacy.sessionStart === 'number') candidates.push(legacy);
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) =>
+    (b.lastActive ?? b.sessionStart ?? 0) - (a.lastActive ?? a.sessionStart ?? 0));
+  return candidates[0];
+}
+
+/** All events across per-session event files (plus the legacy events.json),
+ * honoring each file's clearedAt watermark. */
+function loadAllEvents(): Event[] {
+  const files = listDataFiles(/^events-.+\.json$/);
+  files.push(EVENTS_FILE); // legacy single-file location
+  const all: Event[] = [];
+  for (const file of files) {
+    const data = readJSON<EventsFile>(file);
+    if (!data || !Array.isArray(data.events)) continue;
+    const clearedAt = typeof data.clearedAt === 'number' ? data.clearedAt : 0;
+    for (const e of data.events) {
+      if (e && typeof e.ts === 'number' && e.ts > clearedAt) all.push(e);
+    }
+  }
+  return all;
 }
 
 function formatDuration(mins: number): string {
@@ -51,8 +94,11 @@ function formatDuration(mins: number): string {
 }
 
 function formatDate(ts: number): string {
+  // Local calendar date — toISOString would give the UTC date, which is off
+  // by one day for morning timestamps in UTC+ timezones.
   const d = new Date(ts);
-  return d.toISOString().slice(0, 10);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 function tierFromSessions(n: number): { name: string; next: string | null; toGo: number } {
@@ -105,9 +151,8 @@ export function runStats(): void {
   loadConfig();
   const cfg = getConfig();
   const mem = readJSON<Memory>(MEMORY_FILE);
-  const state = readJSON<State>(STATE_FILE);
-  const eventsFile = readJSON<{ events?: Event[] }>(EVENTS_FILE);
-  const events = eventsFile?.events ?? [];
+  const state = loadCurrentSession();
+  const events = loadAllEvents();
 
   if (!mem || !mem.totalSessions) {
     console.log('No codachi memory yet — run Claude Code once to hatch your pet.');
@@ -158,7 +203,10 @@ export function runStats(): void {
   lines.push(`  ${label('edits        ')} ${e.edits}`);
   lines.push('');
   if (state?.sessionStart) {
-    const curMin = Math.floor((Date.now() - state.sessionStart) / 60000);
+    // Rendered time (sessionStart → lastActive), not wall-clock since start —
+    // a session last seen yesterday shouldn't read as a day long.
+    const end = Math.max(state.sessionStart, state.lastActive ?? state.sessionStart);
+    const curMin = Math.floor((end - state.sessionStart) / 60000);
     lines.push(`  ${label('this session ')} ${formatDuration(curMin)}`);
     lines.push('');
   }

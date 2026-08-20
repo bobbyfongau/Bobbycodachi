@@ -31,6 +31,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { logError, logWarn } from './log.js';
 import { loadPlugins } from './plugins.js';
 import { PLUGIN_MESSAGES } from './plugin-store.js';
@@ -66,15 +67,24 @@ const LOCALE = detectLocale();
 function loadLocaleFile(): Record<string, unknown> {
   if (LOCALE === 'en') return {}; // English is the source — no file needed.
 
-  const candidates = [
-    path.join(os.homedir(), '.config', 'codachi', 'locales', `${LOCALE}.json`),
-  ];
+  // Exact locale first (e.g. zh_cn.json), then the base language (zh.json)
+  // so CODACHI_LOCALE=zh_CN still finds a bundled zh.json. English is the
+  // source — never probe for en.json.
+  const names = [LOCALE];
+  const base = LOCALE.slice(0, 2);
+  if (base !== LOCALE && base !== 'en') names.push(base);
+
+  const candidates: string[] = [];
   // Bundled locales, if shipped: dist/locales/<locale>.json relative to this file.
+  let here: string | undefined;
   try {
-    const here = path.dirname(new URL(import.meta.url).pathname);
-    candidates.push(path.join(here, 'locales', `${LOCALE}.json`));
+    here = path.dirname(fileURLToPath(import.meta.url));
   } catch {
     // ignored — not fatal if import.meta.url isn't resolvable
+  }
+  for (const name of names) {
+    candidates.push(path.join(os.homedir(), '.config', 'codachi', 'locales', `${name}.json`));
+    if (here) candidates.push(path.join(here, 'locales', `${name}.json`));
   }
 
   for (const p of candidates) {
@@ -102,20 +112,50 @@ const LOCALE_DATA: Record<string, unknown> = loadLocaleFile();
  *   - For plain objects: merge key-by-key so translators can override just a
  *     few entries of a big nested pool (e.g. EVENT_MESSAGES.test_passed only).
  */
+/**
+ * Sanitize a brand-new (plugin-contributed) value the fallback doesn't know
+ * about: empty arrays are dropped at ANY depth so pickers never see a pool
+ * they'd index with `tick % 0`. Returns undefined when nothing survives.
+ */
+function dropEmptyPools(v: unknown): unknown {
+  if (Array.isArray(v)) return v.length > 0 ? v : undefined;
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {};
+    let kept = false;
+    for (const [k, inner] of Object.entries(v as Record<string, unknown>)) {
+      const cleaned = dropEmptyPools(inner);
+      if (cleaned !== undefined) { out[k] = cleaned; kept = true; }
+    }
+    return kept ? out : undefined;
+  }
+  return v;
+}
+
 function merge<T>(fallback: T, override: unknown): T {
   if (override === undefined || override === null) return fallback;
 
-  // Arrays: override must be an array to be accepted; otherwise fallback wins.
+  // Arrays: override must be a non-empty array to be accepted; otherwise
+  // fallback wins. An empty pool would make pickers index with `tick % 0`
+  // (NaN) and the statusline would render the literal string "undefined".
   if (Array.isArray(fallback)) {
-    return Array.isArray(override) ? (override as T) : fallback;
+    return Array.isArray(override) && override.length > 0 ? (override as T) : fallback;
   }
 
   // Plain object: recursively merge.
   if (fallback && typeof fallback === 'object') {
     if (typeof override !== 'object' || Array.isArray(override)) return fallback;
-    const out: Record<string, unknown> = { ...(fallback as Record<string, unknown>) };
+    const fallbackObj = fallback as Record<string, unknown>;
+    const out: Record<string, unknown> = { ...fallbackObj };
     for (const [k, v] of Object.entries(override as Record<string, unknown>)) {
-      out[k] = merge((fallback as Record<string, unknown>)[k], v);
+      // Keys the fallback doesn't know about are adopted as-is — that's how
+      // plugins contribute brand-new entries (e.g. a new EVENT_MESSAGES key).
+      // Empty-array pools are dropped so `if (pool)` guards keep working.
+      if (k in fallbackObj) {
+        out[k] = merge(fallbackObj[k], v);
+      } else {
+        const adopted = dropEmptyPools(v);
+        if (adopted !== undefined) out[k] = adopted;
+      }
     }
     return out as T;
   }
