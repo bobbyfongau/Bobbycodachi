@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 /**
  * Claude Code PostToolExecution hook — logs tool events for codachi.
- * Receives JSON on stdin from Claude Code, appends to events file.
+ * Receives JSON on stdin from Claude Code, appends to the per-session
+ * events file (keyed by transcript path / session id, matching the
+ * statusline's keying so both sides agree on which session an event
+ * belongs to).
  * Must exit quickly to never block Claude Code.
  */
 import fs from 'node:fs';
@@ -9,9 +12,9 @@ import path from 'node:path';
 import os from 'node:os';
 import { atomicWrite } from './fs-utils.js';
 import { logError } from './log.js';
+import { deriveSessionKey, eventsFileFor, readEventsFile } from './events.js';
 
 const EVENTS_DIR = path.join(os.homedir(), '.claude', 'plugins', 'codachi');
-const EVENTS_FILE = path.join(EVENTS_DIR, 'events.json');
 const MAX_EVENTS = 50;
 
 interface CodachiEvent {
@@ -30,13 +33,25 @@ function detectExitCode(data: Record<string, unknown>): boolean {
   const topCode = data.exit_code ?? data.exitCode;
   if (topCode !== undefined) return Number(topCode) === 0;
 
-  const output = data.tool_output ?? data.tool_result ?? data.toolResult ?? data.output ?? '';
+  // tool_response is what current Claude Code actually sends; the rest
+  // are legacy/alternate spellings kept as fallbacks.
+  const output = data.tool_response ?? data.tool_output ?? data.tool_result ?? data.toolResult ?? data.output ?? '';
 
-  // Structured result object with exit_code field
+  // Structured result object
   if (typeof output === 'object' && output !== null) {
     const out = output as Record<string, unknown>;
     const code = out.exit_code ?? out.exitCode ?? out.code;
     if (code !== undefined) return Number(code) === 0;
+
+    // Bash tool_response shape: { stdout, stderr, interrupted } — no exit
+    // code field, so scan the text for an "exit code: N" trace.
+    const text = [out.stdout, out.stderr]
+      .filter((v): v is string => typeof v === 'string')
+      .join('\n');
+    const m = text.match(/exit code[:\s]+(\d+)/i);
+    if (m) return m[1] === '0';
+    if (out.interrupted === true) return false;
+    return true;
   }
 
   // String result — look for "Exit code: N" pattern
@@ -108,35 +123,36 @@ function parseEvent(data: Record<string, unknown>): CodachiEvent | null {
  * (matched by timestamp). If a concurrent hook overwrote us, we retry
  * once with the fresh state (which already contains the other hook's
  * event, so both survive).
+ *
+ * readEventsFile drops any events at or before the file's clearedAt
+ * watermark, and we carry that watermark forward on every write, so a
+ * cleared session's events can never be resurrected through this path.
+ * The monotonic totalCount/totalEditCount counters survive the 50-event
+ * trim so milestones don't saturate at the cap.
  */
 const MAX_RETRIES = 1;
 
-function readEvents(): CodachiEvent[] {
-  try {
-    const raw = fs.readFileSync(EVENTS_FILE, 'utf8');
-    const data = JSON.parse(raw) as { events?: CodachiEvent[] };
-    return Array.isArray(data.events) ? data.events : [];
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
-      logError('hook.appendEvent.read', err);
-    }
-    return [];
-  }
-}
-
-function appendEvent(event: CodachiEvent): void {
+function appendEvent(event: CodachiEvent, key: string = 'default'): void {
   try {
     fs.mkdirSync(EVENTS_DIR, { recursive: true });
   } catch (err) {
     logError('hook.appendEvent.mkdir', err);
   }
 
+  const file = eventsFileFor(key);
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    const events = readEvents();
+    const { events, totalCount, totalEditCount, clearedAt } = readEventsFile(file);
     events.push(event);
     const trimmed = events.length > MAX_EVENTS ? events.slice(-MAX_EVENTS) : events;
+    const isEdit = event.type === 'edit' || event.type === 'write';
+    const payload = JSON.stringify({
+      events: trimmed,
+      totalCount: totalCount + 1,
+      totalEditCount: totalEditCount + (isEdit ? 1 : 0),
+      ...(clearedAt > 0 ? { clearedAt } : {}),
+    });
 
-    if (!atomicWrite(EVENTS_FILE, JSON.stringify({ events: trimmed }))) {
+    if (!atomicWrite(file, payload)) {
       continue; // write failed — retry
     }
 
@@ -144,7 +160,7 @@ function appendEvent(event: CodachiEvent): void {
     // If another hook overwrote us, our event won't be there — retry
     // with fresh state (which includes the other hook's event too).
     if (attempt < MAX_RETRIES) {
-      const check = readEvents();
+      const check = readEventsFile(file).events;
       const found = check.some(e => e.ts === event.ts && e.type === event.type && e.detail === event.detail);
       if (found) return;
       continue;
@@ -167,7 +183,13 @@ if (isDirectExecution) {
     try {
       const data = JSON.parse(chunks.join('')) as Record<string, unknown>;
       const event = parseEvent(data);
-      if (event) appendEvent(event);
+      if (event) {
+        const key = deriveSessionKey(
+          typeof data.transcript_path === 'string' ? data.transcript_path : undefined,
+          typeof data.session_id === 'string' ? data.session_id : undefined,
+        );
+        appendEvent(event, key);
+      }
     } catch (err) {
       logError('hook.main', err);
     }

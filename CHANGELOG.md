@@ -4,6 +4,60 @@ All notable changes to codachi are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-08-21
+
+Bug-sweep release: 25 verified defects fixed after a four-month gap.
+
+### Fixed
+
+- **Hook never fired** — `codachi init` registered the hook under
+  `PostToolExecution` (a hook event that doesn't exist) with a legacy flat
+  entry shape. It now writes the current contract: `PostToolUse` with
+  `{hooks:[{type:"command",command}]}` (no `matcher` = match all tools).
+  The hook also reads `tool_response` (the field Claude Code actually
+  sends), so failed commands are finally logged `ok:false`.
+- **Context velocity / `~Xm left` ETA was dead at runtime** — the sample
+  ring buffer was in-memory in a one-shot process. Samples now persist in
+  per-session state, so burn speed and the compact ETA actually render.
+- **Concurrent Claude Code windows thrashed each other** — state and
+  events are now keyed per session (hash of `transcript_path`, falling
+  back to `session_id`). No more session-count inflation, species/palette
+  flicker, or event wiping. Records older than 7 days are pruned; an
+  existing pre-0.4 pet's species/palette is adopted on first run.
+- **Uptime counted idle days** — `totalUptimeMin` now accrues from a
+  persisted `lastActive` watermark (clamped ≥ 0 against clock skew), not
+  wall-clock time between sessions.
+- **`init` could destroy `settings.json`** — an existing-but-unparseable
+  settings file now aborts with a clear message instead of being
+  overwritten; install paths with spaces/non-ASCII work (`fileURLToPath`).
+- **Rendering** — `truncate()` no longer splits surrogate pairs (mojibake);
+  `NO_COLOR`/`TERM=dumb` emit zero escape bytes (RESET/DIM included);
+  width math handles BMP wide emoji, VS16, and ZWJ sequences.
+- **State robustness** — corrupt-but-parseable state files reset invalid
+  fields instead of blanking the statusline; newer-version files are never
+  silently downgraded (unknown fields and version stamps survive rewrites);
+  cleared events can't be resurrected by a racing hook write (`clearedAt`
+  watermark).
+- **Mood/messages** — "welcome back" triggers off actual session start,
+  not epoch-modulo time; tier-upgrade celebration persists ~30s instead of
+  one frame; `many_actions` milestones use monotonic counters instead of
+  saturating at the 50-event cap.
+- **Misc** — `codachi stats` dates render in local time; the config
+  wizard's Enter-to-keep-default no longer deletes saved animal/palette;
+  branch names with dots aren't truncated; locales load from install paths
+  with spaces; `CODACHI_LOCALE=zh_CN` falls back to `zh` before English;
+  plugin-contributed message packs are adopted correctly (empty pools
+  dropped at any depth).
+
+### Changed
+
+- **BREAKING (on-disk layout):** session state moved from global
+  `state.json`/`events.json` to per-session `state-<key>.json`/
+  `events-<key>.json`. Old files are ignored (pet identity is adopted
+  once); delete them at leisure.
+- **BREAKING (settings):** re-run `codachi init` (or `uninstall` + `init`)
+  to replace the old, never-firing hook entry.
+
 ## [0.3.0] — 2026-04-18
 
 ### Added

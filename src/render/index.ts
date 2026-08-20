@@ -2,7 +2,7 @@ import type { PetColors, AnimalType, BodySize, Animation, GitStatus } from '../t
 import { RESET, DIM, rgb } from './colors.js';
 import { getAnimalFrame, getBodySize, getAnimation } from '../animals/index.js';
 import { getMoodMessage } from '../mood.js';
-import { stringWidth } from '../width.js';
+import { stringWidth, graphemes, graphemeWidth } from '../width.js';
 import { renderWidgetLine, resolveWidgetOrder } from '../widgets/index.js';
 import { getConfig } from '../config.js';
 
@@ -24,6 +24,7 @@ interface RenderInput {
   sessionNumber: number;
   animTick: number;
   moodTick: number;
+  sessionTick?: number;
   eventContext: EventContext;
   petName: string;
   contextTimeRemaining: string | null;
@@ -42,25 +43,26 @@ function getTerminalWidth(): number {
   return 120;
 }
 
-function truncate(str: string, maxWidth: number): string {
+export function truncate(str: string, maxWidth: number): string {
   if (visualLength(str) <= maxWidth) return str;
   let result = '';
   let width = 0;
   const target = maxWidth - 3;
-  let i = 0;
-  while (i < str.length && width < target) {
-    const ansi = str.slice(i).match(/^\x1b\[[^m]*m/);
-    if (ansi) {
-      result += ansi[0];
-      i += ansi[0].length;
+  // Split into ANSI escapes (passed through unmeasured) and text runs, then
+  // walk text by grapheme cluster so surrogate pairs and ZWJ sequences are
+  // never split mid-character.
+  const parts = str.split(/(\x1b\[[^m]*m)/);
+  outer: for (const part of parts) {
+    if (part.startsWith('\x1b[')) {
+      result += part;
       continue;
     }
-    const ch = str[i];
-    const cw = stringWidth(ch);
-    if (width + cw > target) break;
-    result += ch;
-    width += cw;
-    i++;
+    for (const g of graphemes(part)) {
+      const cw = graphemeWidth(g);
+      if (width + cw > target) break outer;
+      result += g;
+      width += cw;
+    }
   }
   return result + '...' + RESET;
 }
@@ -136,6 +138,7 @@ export function render(input: RenderInput): void {
     fiveHourUsage: fiveHourUsage?.percent ?? null,
     contextVelocity,
     relationshipTier, sessionNumber, moodTick,
+    sessionTick: input.sessionTick,
     eventContext, tierUpgraded,
   });
 

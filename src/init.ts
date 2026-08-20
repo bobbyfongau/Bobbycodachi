@@ -1,7 +1,7 @@
 /**
  * codachi init — auto-configure Claude Code's ~/.claude/settings.json.
  *
- * Adds a statusLine entry and a PostToolExecution hook. The commands it writes
+ * Adds a statusLine entry and a PostToolUse hook. The commands it writes
  * depend on how codachi is running:
  *
  *   - When installed globally or via `npx codachi init` (argv[1] resolved to
@@ -18,8 +18,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 export const SETTINGS_FILE = path.join(os.homedir(), '.claude', 'settings.json');
+
+/** The Claude Code hook event codachi listens on. */
+const HOOK_EVENT = 'PostToolUse';
+/** Old, incorrect event name earlier versions registered under — cleaned up on init/uninstall. */
+const LEGACY_HOOK_EVENT = 'PostToolExecution';
 
 function detectMode(): { statusCmd: string; hookCmd: string; mode: 'bin' | 'local' } {
   const entry = process.argv[1] || '';
@@ -32,8 +38,9 @@ function detectMode(): { statusCmd: string; hookCmd: string; mode: 'bin' | 'loca
     return { statusCmd: 'codachi', hookCmd: 'codachi-hook', mode: 'bin' };
   }
 
-  // Local dev: absolute paths into the clone.
-  const distDir = path.dirname(new URL(import.meta.url).pathname);
+  // Local dev: absolute paths into the clone. fileURLToPath (not URL.pathname)
+  // so paths with spaces / non-ASCII / Windows drive letters resolve correctly.
+  const distDir = path.dirname(fileURLToPath(import.meta.url));
   const indexPath = path.join(distDir, 'index.js');
   const hookPath = path.join(distDir, 'hook.js');
   if (!fs.existsSync(indexPath)) {
@@ -41,35 +48,87 @@ function detectMode(): { statusCmd: string; hookCmd: string; mode: 'bin' | 'loca
     process.exit(1);
   }
   return {
-    statusCmd: `node ${indexPath}`,
-    hookCmd: `node ${hookPath}`,
+    statusCmd: `node "${indexPath}"`,
+    hookCmd: `node "${hookPath}"`,
     mode: 'local',
   };
+}
+
+function isCodachiCommand(cmd: unknown): boolean {
+  return typeof cmd === 'string' && /codachi(-hook)?|codachi[\\/]dist[\\/]hook/.test(cmd);
+}
+
+/**
+ * True if a hook entry references codachi — either the current schema
+ * ({matcher, hooks: [{type, command}]}) or the legacy flat {matcher, command}
+ * shape written by older codachi versions.
+ */
+function referencesCodachi(h: unknown): boolean {
+  const hook = h as Record<string, unknown>;
+  if (isCodachiCommand(hook.command)) return true;
+  if (Array.isArray(hook.hooks)) {
+    return hook.hooks.some((inner) => isCodachiCommand((inner as Record<string, unknown>).command));
+  }
+  return false;
+}
+
+/**
+ * Read and parse settings.json.
+ *
+ * Returns {} when the file doesn't exist. When the file exists but can't be
+ * read or parsed, returns null — callers must abort rather than write, so a
+ * user's hand-edited (or half-written) settings file is never destroyed.
+ */
+function loadSettings(): Record<string, unknown> | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(SETTINGS_FILE, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    console.error(`Error: could not read ${SETTINGS_FILE}: ${(err as Error).message}`);
+    return null;
+  }
+  try {
+    // Strip a UTF-8 BOM (Windows editors add one; JSON.parse rejects it).
+    const parsed = JSON.parse(raw.replace(/^\uFEFF/, '')) as unknown;
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      console.error(`Error: ${SETTINGS_FILE} does not contain a JSON object.`);
+      return null;
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    console.error(`Error: ${SETTINGS_FILE} exists but is not valid JSON.`);
+    console.error('Refusing to overwrite it — fix (or move) the file, then re-run.');
+    return null;
+  }
 }
 
 export function runInit(): void {
   const { statusCmd, hookCmd, mode } = detectMode();
 
   // Load existing settings — preserve whatever the user already has.
-  let settings: Record<string, unknown> = {};
-  try {
-    settings = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) as Record<string, unknown>;
-  } catch {
-    // No existing file — fine, we'll create one.
+  const settings = loadSettings();
+  if (settings === null) {
+    process.exit(1);
   }
 
   settings.statusLine = { type: 'command', command: statusCmd };
 
-  const hooks = (settings.hooks ?? {}) as Record<string, unknown[]>;
-  const postHooks = Array.isArray(hooks.PostToolExecution) ? hooks.PostToolExecution : [];
+  const hooks = (settings.hooks ?? {}) as Record<string, unknown>;
+  const postHooks = Array.isArray(hooks[HOOK_EVENT]) ? (hooks[HOOK_EVENT] as unknown[]) : [];
 
   // Replace any existing codachi hook rather than duplicating.
-  const cleaned = postHooks.filter((h: unknown) => {
-    const hook = h as Record<string, unknown>;
-    return !(typeof hook.command === 'string' && /codachi(-hook)?|codachi[\\/]dist[\\/]hook/.test(hook.command));
-  });
-  cleaned.push({ matcher: '', command: hookCmd });
-  hooks.PostToolExecution = cleaned;
+  const cleaned = postHooks.filter((h) => !referencesCodachi(h));
+  // No matcher key at all = match every tool (the documented match-all form).
+  cleaned.push({ hooks: [{ type: 'command', command: hookCmd }] });
+  hooks[HOOK_EVENT] = cleaned;
+
+  // Migrate away from the legacy event name older versions registered under.
+  if (Array.isArray(hooks[LEGACY_HOOK_EVENT])) {
+    const remaining = (hooks[LEGACY_HOOK_EVENT] as unknown[]).filter((h) => !referencesCodachi(h));
+    if (remaining.length === 0) delete hooks[LEGACY_HOOK_EVENT];
+    else hooks[LEGACY_HOOK_EVENT] = remaining;
+  }
   settings.hooks = hooks;
 
   fs.mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
@@ -88,12 +147,14 @@ export function runInit(): void {
 }
 
 export function runUninstall(): void {
-  let settings: Record<string, unknown> = {};
-  try {
-    settings = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) as Record<string, unknown>;
-  } catch {
+  if (!fs.existsSync(SETTINGS_FILE)) {
     console.log('No settings file found — nothing to uninstall.');
     return;
+  }
+
+  const settings = loadSettings();
+  if (settings === null) {
+    process.exit(1);
   }
 
   let changed = false;
@@ -105,16 +166,17 @@ export function runUninstall(): void {
     changed = true;
   }
 
-  // Remove codachi hook from PostToolExecution.
-  const hooks = settings.hooks as Record<string, unknown[]> | undefined;
-  if (hooks?.PostToolExecution && Array.isArray(hooks.PostToolExecution)) {
-    const before = hooks.PostToolExecution.length;
-    hooks.PostToolExecution = hooks.PostToolExecution.filter((h: unknown) => {
-      const hook = h as Record<string, unknown>;
-      return !(typeof hook.command === 'string' && /codachi(-hook)?|codachi[\\/]dist[\\/]hook/.test(hook.command));
-    });
-    if (hooks.PostToolExecution.length < before) changed = true;
-    if (hooks.PostToolExecution.length === 0) delete hooks.PostToolExecution;
+  // Remove codachi hooks — current event and the legacy one older versions used.
+  const hooks = settings.hooks as Record<string, unknown> | undefined;
+  if (hooks) {
+    for (const event of [HOOK_EVENT, LEGACY_HOOK_EVENT]) {
+      const entries = hooks[event];
+      if (!Array.isArray(entries)) continue;
+      const remaining = entries.filter((h) => !referencesCodachi(h));
+      if (remaining.length < entries.length) changed = true;
+      if (remaining.length === 0) delete hooks[event];
+      else hooks[event] = remaining;
+    }
     if (Object.keys(hooks).length === 0) delete settings.hooks;
   }
 

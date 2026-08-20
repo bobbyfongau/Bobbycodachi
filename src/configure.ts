@@ -77,7 +77,7 @@ async function promptName(r: readline.Interface, existing?: string): Promise<str
 
 async function promptAnimal(r: readline.Interface, existing?: AnimalType): Promise<AnimalType | undefined> {
   header('Animal species');
-  console.log(`${DIM}Pick your companion (or leave blank for random)${RESET}\n`);
+  console.log(`${DIM}Pick your companion (Enter keeps current, 6 for random)${RESET}\n`);
 
   for (let i = 0; i < ANIMALS.length; i++) {
     const type = ANIMALS[i];
@@ -88,6 +88,7 @@ async function promptAnimal(r: readline.Interface, existing?: AnimalType): Promi
   console.log(`    ${YELLOW}6${RESET}. ${DIM}random (each session picks different)${RESET}`);
 
   const answer = await ask(r, '\n  Choice [1-6]: ');
+  if (answer === '') return existing; // Enter = keep current (or stay random)
   const n = parseInt(answer, 10);
   if (n >= 1 && n <= 5) {
     const selected = ANIMALS[n - 1];
@@ -99,7 +100,7 @@ async function promptAnimal(r: readline.Interface, existing?: AnimalType): Promi
 
 async function promptPalette(r: readline.Interface, existing?: number): Promise<number | undefined> {
   header('Color palette');
-  console.log(`${DIM}Pick a color scheme (or leave blank for random)${RESET}\n`);
+  console.log(`${DIM}Pick a color scheme (Enter keeps current, 11 for random)${RESET}\n`);
 
   for (let i = 0; i < PALETTES.length; i++) {
     const marker = existing === i ? `${GREEN}●${RESET}` : ' ';
@@ -110,6 +111,7 @@ async function promptPalette(r: readline.Interface, existing?: number): Promise<
   console.log(`    ${YELLOW}11${RESET}  ${DIM}random${RESET}`);
 
   const answer = await ask(r, '\n  Choice [0-11]: ');
+  if (answer === '') return existing; // Enter = keep current (or stay random)
   const n = parseInt(answer, 10);
   if (n >= 0 && n <= 9) return n;
   return undefined;

@@ -1,17 +1,49 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { parseEvent, detectExitCode, extractFilePath, appendEvent } from './hook.js';
 import type { CodachiEvent } from './hook.js';
 
-vi.mock('node:fs', () => ({
-  default: {
-    readFileSync: vi.fn(),
-    writeFileSync: vi.fn(),
-    mkdirSync: vi.fn(),
-  },
-}));
+// In-memory fake filesystem so appendEvent's read-modify-write (and its
+// verify pass through atomicWrite/rename) runs end-to-end.
+const fake = vi.hoisted(() => {
+  const files = new Map<string, string>();
+  const enoent = (p: string) => Object.assign(new Error('ENOENT: ' + p), { code: 'ENOENT' });
+  return {
+    files,
+    fs: {
+      readFileSync: (p: unknown) => {
+        const k = String(p);
+        if (!files.has(k)) throw enoent(k);
+        return files.get(k)!;
+      },
+      writeFileSync: (p: unknown, d: unknown) => { files.set(String(p), String(d)); },
+      renameSync: (a: unknown, b: unknown) => {
+        const k = String(a);
+        if (!files.has(k)) throw enoent(k);
+        files.set(String(b), files.get(k)!);
+        files.delete(k);
+      },
+      mkdirSync: () => undefined,
+      readdirSync: () => [],
+      unlinkSync: (p: unknown) => { files.delete(String(p)); },
+      statSync: (p: unknown) => { throw enoent(String(p)); },
+      appendFileSync: () => undefined,
+    },
+  };
+});
 
-beforeEach(() => { vi.resetAllMocks(); });
+vi.mock('node:fs', () => ({ default: fake.fs }));
+
+const EVENTS_DIR = path.join(os.homedir(), '.claude', 'plugins', 'codachi');
+const eventsFile = (key: string) => path.join(EVENTS_DIR, `events-${key}.json`);
+
+function readEventsJSON(key: string): { events: CodachiEvent[]; totalCount?: number; totalEditCount?: number; clearedAt?: number } {
+  expect(fake.files.has(eventsFile(key)), `expected ${eventsFile(key)} to exist`).toBe(true);
+  return JSON.parse(fake.files.get(eventsFile(key))!);
+}
+
+beforeEach(() => { fake.files.clear(); });
 
 describe('extractFilePath', () => {
   it('extracts file_path', () => {
@@ -37,12 +69,39 @@ describe('detectExitCode', () => {
     expect(detectExitCode({ exit_code: 1 })).toBe(false);
   });
 
-  it('detects from structured tool_output', () => {
+  // tool_response is the field real Claude Code PostToolUse payloads carry
+  it('detects from structured tool_response', () => {
+    expect(detectExitCode({ tool_response: { exit_code: 0 } })).toBe(true);
+    expect(detectExitCode({ tool_response: { exitCode: 2 } })).toBe(false);
+  });
+
+  it('detects failure from tool_response stdout/stderr text (Bash shape)', () => {
+    expect(detectExitCode({
+      tool_response: { stdout: '', stderr: 'npm ERR!\nExit code: 1', interrupted: false },
+    })).toBe(false);
+    expect(detectExitCode({
+      tool_response: { stdout: 'done\nExit code: 0', stderr: '', interrupted: false },
+    })).toBe(true);
+  });
+
+  it('treats an interrupted tool_response as failure', () => {
+    expect(detectExitCode({ tool_response: { stdout: '', stderr: '', interrupted: true } })).toBe(false);
+  });
+
+  it('defaults to success for a clean tool_response with no exit info', () => {
+    expect(detectExitCode({ tool_response: { stdout: 'all good', stderr: '', interrupted: false } })).toBe(true);
+  });
+
+  it('detects from string tool_response', () => {
+    expect(detectExitCode({ tool_response: 'Error\nexit code: 1' })).toBe(false);
+  });
+
+  it('detects from structured tool_output (legacy fallback)', () => {
     expect(detectExitCode({ tool_output: { exit_code: 0 } })).toBe(true);
     expect(detectExitCode({ tool_output: { exitCode: 1 } })).toBe(false);
   });
 
-  it('detects from string output', () => {
+  it('detects from string output (legacy fallback)', () => {
     expect(detectExitCode({ tool_output: 'Output\nExit code: 0' })).toBe(true);
     expect(detectExitCode({ tool_output: 'Error\nexit code: 1' })).toBe(false);
   });
@@ -57,6 +116,15 @@ describe('parseEvent', () => {
   it('parses bash command', () => {
     const event = parseEvent({ tool_name: 'Bash', tool_input: { command: 'npm test' }, exit_code: 0 });
     expect(event).toEqual({ type: 'bash', detail: 'npm test', ok: true, ts: expect.any(Number) });
+  });
+
+  it('parses a failing bash command from a real tool_response payload', () => {
+    const event = parseEvent({
+      tool_name: 'Bash',
+      tool_input: { command: 'npm test' },
+      tool_response: { stdout: '', stderr: '1 failing\nExit code: 1', interrupted: false },
+    });
+    expect(event?.ok).toBe(false);
   });
 
   it('parses edit event', () => {
@@ -137,39 +205,69 @@ describe('parseEvent', () => {
 });
 
 describe('appendEvent', () => {
-  it('appends to existing events', () => {
-    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+  it('appends to existing events and bumps the monotonic counters', () => {
+    fake.files.set(eventsFile('default'), JSON.stringify({
       events: [{ type: 'read', detail: 'a.ts', ok: true, ts: 1 }],
+      totalCount: 1, totalEditCount: 0,
     }));
 
-    const event: CodachiEvent = { type: 'bash', detail: 'npm test', ok: true, ts: 2 };
-    appendEvent(event);
+    appendEvent({ type: 'bash', detail: 'npm test', ok: true, ts: 2 });
 
-    expect(fs.writeFileSync).toHaveBeenCalledWith(
-      expect.stringContaining('events.json'),
-      expect.stringContaining('"npm test"'),
-    );
+    const written = readEventsJSON('default');
+    expect(written.events.map(e => e.detail)).toEqual(['a.ts', 'npm test']);
+    expect(written.totalCount).toBe(2);
+    expect(written.totalEditCount).toBe(0);
   });
 
-  it('creates directory if needed', () => {
-    vi.mocked(fs.readFileSync).mockImplementation(() => { throw new Error('ENOENT'); });
+  it('counts edits and writes in totalEditCount', () => {
+    appendEvent({ type: 'edit', detail: 'a.ts', ok: true, ts: 1 });
+    appendEvent({ type: 'write', detail: 'b.ts', ok: true, ts: 2 });
+    appendEvent({ type: 'bash', detail: 'ls', ok: true, ts: 3 });
 
-    appendEvent({ type: 'bash', detail: 'ls', ok: true, ts: 1 });
-
-    expect(fs.mkdirSync).toHaveBeenCalledWith(expect.any(String), { recursive: true });
+    const written = readEventsJSON('default');
+    expect(written.totalCount).toBe(3);
+    expect(written.totalEditCount).toBe(2);
   });
 
-  it('limits to MAX_EVENTS (50)', () => {
+  it('writes to the per-session file for the given key', () => {
+    appendEvent({ type: 'bash', detail: 'ls', ok: true, ts: 1 }, 'abc123');
+    expect(fake.files.has(eventsFile('abc123'))).toBe(true);
+    expect(fake.files.has(eventsFile('default'))).toBe(false);
+  });
+
+  it('limits stored events to 50 while counters keep growing', () => {
     const events = Array.from({ length: 55 }, (_, i) => ({
-      type: 'bash', detail: `cmd${i}`, ok: true, ts: i,
+      type: 'bash', detail: `cmd${i}`, ok: true, ts: i + 1,
     }));
-    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ events }));
+    fake.files.set(eventsFile('default'), JSON.stringify({ events, totalCount: 60 }));
 
     appendEvent({ type: 'bash', detail: 'new', ok: true, ts: 100 });
 
-    const writeCall = vi.mocked(fs.writeFileSync).mock.calls[0];
-    const written = JSON.parse(writeCall[1] as string) as { events: CodachiEvent[] };
+    const written = readEventsJSON('default');
     expect(written.events.length).toBeLessThanOrEqual(50);
     expect(written.events[written.events.length - 1].detail).toBe('new');
+    expect(written.totalCount).toBe(61);
+  });
+
+  it('preserves clearedAt and never resurrects pre-clear events', () => {
+    fake.files.set(eventsFile('default'), JSON.stringify({
+      events: [{ type: 'bash', detail: 'stale', ok: false, ts: 500 }],
+      totalCount: 50, totalEditCount: 10,
+      clearedAt: 1000, // cleared AFTER those events were written
+    }));
+
+    appendEvent({ type: 'bash', detail: 'fresh', ok: true, ts: 2000 });
+
+    const written = readEventsJSON('default');
+    expect(written.clearedAt).toBe(1000);
+    expect(written.events.map(e => e.detail)).toEqual(['fresh']); // stale dropped
+    expect(written.totalCount).toBe(51);
+  });
+
+  it('creates the file when none exists', () => {
+    appendEvent({ type: 'bash', detail: 'ls', ok: true, ts: 1 });
+    const written = readEventsJSON('default');
+    expect(written.events).toHaveLength(1);
+    expect(written.totalCount).toBe(1);
   });
 });

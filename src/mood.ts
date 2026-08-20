@@ -1,4 +1,5 @@
 import type { BodySize, Animation, AnimalType, GitStatus } from './types.js';
+import { sessionAgeTick } from './state.js';
 import type { RelationshipTier } from './state.js';
 import type { EventContext } from './events.js';
 
@@ -23,6 +24,9 @@ export interface MoodContext {
   moodTick: number;
   eventContext: EventContext;
   tierUpgraded: boolean;
+  /** Ticks (10s) since the session actually started. Optional — when
+   * omitted, it is derived from the session state. */
+  sessionTick?: number;
 }
 
 // ── Helper: resolve message (string or template function) ──
@@ -145,8 +149,10 @@ export function getMoodMessage(ctx: MoodContext): string {
     return BUSY_MESSAGES[tick % BUSY_MESSAGES.length];
   }
 
-  // Priority 6: welcome back (first few ticks)
-  if (tick % 60 < 2) {
+  // Priority 6: welcome back — gated on time since the session actually
+  // started (first ~30s), never on epoch-modulo wall-clock time.
+  const sessionTick = ctx.sessionTick ?? sessionAgeTick();
+  if (sessionTick < 3) {
     const msgs = WELCOME_MESSAGES[relationshipTier];
     const base = msgs[tick % msgs.length];
     return sessionNumber > 1 ? `${base} #${sessionNumber}` : base;

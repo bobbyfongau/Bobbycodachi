@@ -118,6 +118,32 @@ describe('color level fallbacks', () => {
     expect(mod.rgb(255, 0, 0)).toBe('');
   });
 
+  it('none mode empties RESET and DIM too — zero escape bytes', async () => {
+    process.env.FORCE_COLOR = '0';
+    vi.resetModules();
+    const mod = await import('./colors.js');
+    expect(mod.RESET).toBe('');
+    expect(mod.DIM).toBe('');
+  });
+
+  it('NO_COLOR empties RESET and DIM', async () => {
+    process.env.NO_COLOR = '1';
+    delete process.env.FORCE_COLOR;
+    vi.resetModules();
+    const mod = await import('./colors.js');
+    expect(mod.RESET).toBe('');
+    expect(mod.DIM).toBe('');
+    delete process.env.NO_COLOR;
+  });
+
+  it('none-mode progressBar output contains no escape bytes', async () => {
+    process.env.FORCE_COLOR = '0';
+    vi.resetModules();
+    const mod = await import('./colors.js');
+    const bar = mod.progressBar(50, 10, mod.getContextColor);
+    expect(bar).not.toContain('\x1b');
+  });
+
   it('progressBar uses ASCII in none mode', async () => {
     process.env.FORCE_COLOR = '0';
     vi.resetModules();

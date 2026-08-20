@@ -37,6 +37,7 @@ function setupGit(opts: {
   shortstat?: string;
   log?: string;
   stash?: string;
+  revParse?: string;     // output of `git rev-parse --short HEAD` (detached HEAD)
 }) {
   mockSpawnSync.mockImplementation((_cmd: any, args: any) => {
     callCount++;
@@ -46,6 +47,7 @@ function setupGit(opts: {
     if (sub === 'diff') return ok(opts.shortstat ?? '');
     if (sub === 'log') return ok(opts.log ?? '');
     if (sub === 'stash') return ok(opts.stash ?? '');
+    if (sub === 'rev-parse') return ok(opts.revParse ?? '');
     return ok('');
   });
 }
@@ -119,6 +121,25 @@ describe('getGitStatus', () => {
     const status = getGitStatus('/tmp/fresh-' + Date.now());
     expect(status!.branch).toBe('master');
     expect(status!.untracked).toBe(1);
+  });
+
+  it('keeps branch names containing dots intact (with upstream)', () => {
+    setupGit({ status: '## release/v1.2.3...origin/release/v1.2.3 [ahead 2]' });
+    const status = getGitStatus('/tmp/dotted-' + Date.now());
+    expect(status!.branch).toBe('release/v1.2.3');
+    expect(status!.ahead).toBe(2);
+  });
+
+  it('keeps branch names containing dots intact (no upstream)', () => {
+    setupGit({ status: '## release-1.2' });
+    const status = getGitStatus('/tmp/dotted-local-' + Date.now());
+    expect(status!.branch).toBe('release-1.2');
+  });
+
+  it('shows short hash for detached HEAD', () => {
+    setupGit({ status: '## HEAD (no branch)', revParse: 'abc1234' });
+    const status = getGitStatus('/tmp/detached-' + Date.now());
+    expect(status!.branch).toBe('abc1234');
   });
 
   it('truncates long branch names', () => {

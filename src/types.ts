@@ -1,5 +1,6 @@
 export interface StdinData {
   transcript_path?: string;
+  session_id?: string;
   cwd?: string;
   model?: {
     id?: string;

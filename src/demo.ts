@@ -54,7 +54,7 @@ export async function runDemo(): Promise<void> {
   console.log('');
   console.log('');
 
-  for (const step of DEMO_STEPS) {
+  for (const [stepIndex, step] of DEMO_STEPS.entries()) {
     // Move up 4 lines (label + 3 render lines) and clear
     process.stdout.write('\x1b[4A\x1b[J');
 
@@ -81,6 +81,8 @@ export async function runDemo(): Promise<void> {
       sessionNumber: 18,
       animTick: Math.floor(Date.now() / 1500),
       moodTick: Math.floor(Date.now() / 3000),
+      // Early steps sit inside the welcome window so the demo shows greetings.
+      sessionTick: stepIndex,
       eventContext: step.event,
       petName,
       contextTimeRemaining: step.velocity > 0.5 ? `~${Math.round((100 - step.contextPercent) / step.velocity)}m` : null,

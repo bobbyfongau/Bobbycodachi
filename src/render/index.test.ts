@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render } from './index.js';
+import { render, truncate } from './index.js';
+import { stringWidth } from '../width.js';
 import type { EventContext } from '../events.js';
+
+const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 const noEvent: EventContext = {
   category: null, freshness: 'none', detail: '',
@@ -167,5 +171,82 @@ describe('render', () => {
   it('does not show language tag on line 3', () => {
     render(makeRenderInput());
     expect(logOutput[2]).not.toContain('[Node]');
+  });
+
+  it('never emits lone surrogates when git last commit has emoji', () => {
+    render(makeRenderInput({
+      git: {
+        branch: 'main', isDirty: false, ahead: 0, behind: 0,
+        modified: 0, added: 0, deleted: 0, untracked: 0,
+        insertions: 0, deletions: 0, fileCount: 0,
+        lastCommit: '🎉 initial release with a fairly long message', stashCount: 0,
+        dominantFileType: null,
+      },
+    }));
+    for (const line of logOutput) {
+      expect(line).not.toMatch(LONE_SURROGATE);
+    }
+  });
+
+  it('emits zero escape bytes when NO_COLOR is set', async () => {
+    process.env.NO_COLOR = '1';
+    vi.resetModules();
+    const mod = await import('./index.js');
+    mod.render(makeRenderInput({
+      colors: { body: '', accent: '', face: '', blush: '' },
+      git: {
+        branch: 'main', isDirty: true, ahead: 1, behind: 0,
+        modified: 2, added: 1, deleted: 0, untracked: 3,
+        insertions: 10, deletions: 5, fileCount: 3,
+        lastCommit: 'test commit', stashCount: 1, dominantFileType: null,
+      },
+    }));
+    expect(logOutput.length).toBeGreaterThan(0);
+    for (const line of logOutput) {
+      expect(line).not.toContain('\x1b');
+    }
+    delete process.env.NO_COLOR;
+    vi.resetModules();
+  });
+});
+
+describe('truncate', () => {
+  it('returns strings that fit unchanged', () => {
+    expect(truncate('hello', 10)).toBe('hello');
+    expect(truncate('exactly10!', 10)).toBe('exactly10!');
+  });
+
+  it('truncates to maxWidth with ellipsis', () => {
+    const out = stripAnsi(truncate('hello wonderful world', 10));
+    expect(out).toBe('hello w...');
+    expect(stringWidth(out)).toBeLessThanOrEqual(10);
+  });
+
+  it('never splits a surrogate pair', () => {
+    // Cut lands with exactly one column of room before the emoji.
+    const out = truncate('last: ab🎉 initial commit message', 12);
+    expect(out).not.toMatch(LONE_SURROGATE);
+    expect(stripAnsi(out)).toBe('last: ab...');
+    expect(stringWidth(out)).toBeLessThanOrEqual(12);
+  });
+
+  it('never splits a ZWJ sequence', () => {
+    const out = truncate('name: 👩‍💻 coding away happily', 9);
+    expect(out).not.toMatch(LONE_SURROGATE);
+    expect(stripAnsi(out)).toBe('name: ...');
+  });
+
+  it('keeps whole emoji when there is room for them', () => {
+    const out = stripAnsi(truncate('a🎉🎉🎉🎉🎉', 8));
+    expect(out).toBe('a🎉🎉...');
+    expect(stringWidth(out)).toBeLessThanOrEqual(8);
+  });
+
+  it('preserves ANSI escapes without counting them', () => {
+    const colored = '\x1b[38;2;255;0;0mred and quite long text\x1b[0m';
+    const out = truncate(colored, 10);
+    expect(out).toContain('\x1b[38;2;255;0;0m');
+    expect(stringWidth(out)).toBeLessThanOrEqual(10);
+    expect(stripAnsi(out)).toBe('red and...');
   });
 });

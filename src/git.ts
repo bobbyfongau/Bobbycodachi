@@ -85,8 +85,14 @@ function compute(cwd?: string): GitStatus | null {
     };
   }
 
-  const branchMatch = branchLine.match(/^## ([^\s.]+)/);
-  let branch = branchMatch ? branchMatch[1] : 'HEAD';
+  // Parse branch from "## <branch>[...<upstream>][ [ahead N, behind M]]".
+  // Split on the literal "..." upstream separator — single dots are legal in
+  // branch names (e.g. release/v1.2.3), so excluding "." in a character class
+  // would truncate them at the first dot.
+  let branch = 'HEAD';
+  if (branchLine.startsWith('## ')) {
+    branch = branchLine.slice(3).split('...')[0].split(' ')[0] || 'HEAD';
+  }
 
   // Detached HEAD: show short commit hash instead of bare "HEAD".
   // `git status --porcelain -b` outputs "## HEAD (no branch)" when detached.

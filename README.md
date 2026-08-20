@@ -8,7 +8,7 @@
 ![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Zero Dependencies](https://img.shields.io/badge/dependencies-0-orange)
-![Tests](https://img.shields.io/badge/tests-369%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-461%20passing-brightgreen)
 
 ![codachi demo](codachi-demo.gif)
 
@@ -34,7 +34,7 @@ One line. That's it.
 npx codachi init
 ```
 
-This wires up your `~/.claude/settings.json` statusline and PostToolExecution hook. Restart Claude Code and your pet will hatch.
+This wires up your `~/.claude/settings.json` statusline and PostToolUse hook. Restart Claude Code and your pet will hatch.
 
 Prefer a global install? `npm install -g codachi && codachi init` works too.
 
@@ -70,10 +70,15 @@ Add to `~/.claude/settings.json`:
     "command": "node /absolute/path/to/codachi/dist/index.js"
   },
   "hooks": {
-    "PostToolExecution": [
+    "PostToolUse": [
       {
         "matcher": "",
-        "command": "node /absolute/path/to/codachi/dist/hook.js"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /absolute/path/to/codachi/dist/hook.js"
+          }
+        ]
       }
     ]
   }
@@ -151,7 +156,7 @@ Each session randomly assigns a species and color palette (or set them in config
 
 ### Event-reactive mood (900+ messages)
 
-Via the PostToolExecution hook, your pet knows what Claude is doing and reacts in real time.
+Via the PostToolUse hook, your pet knows what Claude is doing and reacts in real time.
 
 | Event | Example message |
 |:------|:----------------|
@@ -333,7 +338,7 @@ Or edit `~/.config/codachi/config.json` directly:
 ```
 Claude Code ──stdin:JSON──▶ codachi ──stdout:ANSI──▶ statusline
                  │
-                 └──hook──▶ events.json ──▶ mood engine
+                 └──hook──▶ events-<session>.json ──▶ mood engine
 ```
 
 | Property | Detail |
@@ -354,7 +359,7 @@ src/
 ├── index.ts           # Entry point + init/demo routing
 ├── init.ts            # One-command install (codachi init)
 ├── demo.ts            # Live terminal demo
-├── hook.ts            # Claude Code PostToolExecution hook
+├── hook.ts            # Claude Code PostToolUse hook
 ├── events.ts          # Event classifier (40 categories)
 ├── mood.ts            # Mood engine (15-tier priority)
 ├── messages/          # 900+ messages split by category
@@ -386,7 +391,7 @@ src/
 npm install
 npm run build          # compile TypeScript + copy locales to dist/
 npm run dev            # watch mode
-npm test               # 370 tests
+npm test               # 461 tests
 npm run test:cov       # coverage report (91%+ lines)
 npm run bench          # render p50/p95/p99 benchmark (budget: 50ms)
 ```
