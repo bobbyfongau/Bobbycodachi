@@ -7,7 +7,7 @@ const savedForce = process.env.FORCE_COLOR;
 process.env.FORCE_COLOR = '3';
 
 const {
-  rgb, RESET, DIM, getContextColor, getUsageColor, progressBar, COLOR_LEVEL,
+  rgb, uiRgb, RESET, DIM, getContextColor, getUsageColor, progressBar, COLOR_LEVEL,
 } = await import('./colors.js');
 
 afterAll(() => {
@@ -37,32 +37,32 @@ describe('constants', () => {
 
 describe('getContextColor', () => {
   it('returns red for >= 85%', () => {
-    expect(getContextColor(85)).toBe(rgb(255, 80, 80));
-    expect(getContextColor(100)).toBe(rgb(255, 80, 80));
+    expect(getContextColor(85)).toBe(uiRgb(255, 80, 80));
+    expect(getContextColor(100)).toBe(uiRgb(255, 80, 80));
   });
 
   it('returns orange for 70-84%', () => {
-    expect(getContextColor(70)).toBe(rgb(255, 200, 50));
-    expect(getContextColor(84)).toBe(rgb(255, 200, 50));
+    expect(getContextColor(70)).toBe(uiRgb(255, 200, 50));
+    expect(getContextColor(84)).toBe(uiRgb(255, 200, 50));
   });
 
   it('returns green for < 70%', () => {
-    expect(getContextColor(0)).toBe(rgb(80, 220, 120));
-    expect(getContextColor(69)).toBe(rgb(80, 220, 120));
+    expect(getContextColor(0)).toBe(uiRgb(80, 220, 120));
+    expect(getContextColor(69)).toBe(uiRgb(80, 220, 120));
   });
 });
 
 describe('getUsageColor', () => {
   it('returns red for >= 90%', () => {
-    expect(getUsageColor(90)).toBe(rgb(255, 80, 80));
+    expect(getUsageColor(90)).toBe(uiRgb(255, 80, 80));
   });
 
   it('returns purple for 75-89%', () => {
-    expect(getUsageColor(75)).toBe(rgb(200, 100, 255));
+    expect(getUsageColor(75)).toBe(uiRgb(200, 100, 255));
   });
 
   it('returns blue for < 75%', () => {
-    expect(getUsageColor(50)).toBe(rgb(100, 150, 255));
+    expect(getUsageColor(50)).toBe(uiRgb(100, 150, 255));
   });
 });
 
@@ -86,7 +86,7 @@ describe('progressBar', () => {
 
   it('uses color function for styling', () => {
     const bar = progressBar(90, 5, getContextColor);
-    expect(bar).toContain(rgb(255, 80, 80));
+    expect(bar).toContain(uiRgb(255, 80, 80));
     expect(bar).toContain(RESET);
   });
 });

@@ -1,4 +1,4 @@
-import { DIM, RESET, rgb } from '../render/colors.js';
+import { DIM, RESET, uiRgb } from '../render/colors.js';
 import type { Widget } from './types.js';
 
 function formatCost(usd: number): string {
@@ -12,9 +12,9 @@ export const costWidget: Widget = {
   id: 'cost',
   render(ctx) {
     if (ctx.sessionCost === null || ctx.sessionCost === 0) return '';
-    const color = ctx.sessionCost >= 5 ? rgb(255, 80, 80)
-      : ctx.sessionCost >= 1 ? rgb(255, 200, 50)
-      : rgb(80, 220, 120);
+    const color = ctx.sessionCost >= 5 ? uiRgb(255, 80, 80)
+      : ctx.sessionCost >= 1 ? uiRgb(255, 200, 50)
+      : uiRgb(80, 220, 120);
     return `${DIM}cost${RESET} ${color}${formatCost(ctx.sessionCost)}${RESET}`;
   },
 };

@@ -1,5 +1,5 @@
 import type { PetColors, AnimalType, BodySize, Animation, GitStatus } from '../types.js';
-import { RESET, DIM, rgb } from './colors.js';
+import { RESET, DIM, uiRgb, dimAnsi } from './colors.js';
 import { getAnimalFrame, getBodySize, getAnimation } from '../animals/index.js';
 import { getMoodMessage } from '../mood.js';
 import { stringWidth, graphemes, graphemeWidth } from '../width.js';
@@ -142,7 +142,10 @@ export function render(input: RenderInput): void {
     eventContext, tierUpgraded,
   });
 
-  const { body: C, accent: A, face: F, blush: B } = colors;
+  // Info text takes a darkened palette; the pet art (colorizePetLine above)
+  // keeps the full-brightness colors.
+  const C = dimAnsi(colors.body), A = dimAnsi(colors.accent),
+        F = dimAnsi(colors.face), B = dimAnsi(colors.blush);
   const SEP = `${DIM}|${RESET}`;
   const { tokenSummary } = input;
 
@@ -171,25 +174,25 @@ export function render(input: RenderInput): void {
     const dm = git.isDirty ? '*' : '';
     line2 = `${C}git:(${A}${git.branch}${dm}${C})${RESET}`;
     const fs: string[] = [];
-    if (git.modified > 0) fs.push(`${rgb(255, 200, 50)}~${git.modified}${RESET}`);
-    if (git.added > 0) fs.push(`${rgb(80, 220, 120)}+${git.added}${RESET}`);
-    if (git.deleted > 0) fs.push(`${rgb(255, 80, 80)}-${git.deleted}${RESET}`);
-    if (git.untracked > 0) fs.push(`${rgb(180, 180, 200)}?${git.untracked}${RESET}`);
+    if (git.modified > 0) fs.push(`${uiRgb(255, 200, 50)}~${git.modified}${RESET}`);
+    if (git.added > 0) fs.push(`${uiRgb(80, 220, 120)}+${git.added}${RESET}`);
+    if (git.deleted > 0) fs.push(`${uiRgb(255, 80, 80)}-${git.deleted}${RESET}`);
+    if (git.untracked > 0) fs.push(`${uiRgb(180, 180, 200)}?${git.untracked}${RESET}`);
     if (fs.length > 0) line2 += ` ${fs.join(' ')}`;
     if (git.insertions > 0 || git.deletions > 0) {
       const lp: string[] = [];
-      if (git.insertions > 0) lp.push(`${rgb(80, 220, 120)}+${git.insertions}${RESET}`);
-      if (git.deletions > 0) lp.push(`${rgb(255, 80, 80)}-${git.deletions}${RESET}`);
+      if (git.insertions > 0) lp.push(`${uiRgb(80, 220, 120)}+${git.insertions}${RESET}`);
+      if (git.deletions > 0) lp.push(`${uiRgb(255, 80, 80)}-${git.deletions}${RESET}`);
       line2 += ` ${SEP} ${lp.join(' ')} ${C}lines${RESET}`;
     }
     if (git.ahead > 0 || git.behind > 0) {
       const rp: string[] = [];
-      if (git.ahead > 0) rp.push(`${rgb(255, 200, 50)}up${git.ahead}${RESET}`);
-      if (git.behind > 0) rp.push(`${rgb(200, 100, 255)}dn${git.behind}${RESET}`);
+      if (git.ahead > 0) rp.push(`${uiRgb(255, 200, 50)}up${git.ahead}${RESET}`);
+      if (git.behind > 0) rp.push(`${uiRgb(200, 100, 255)}dn${git.behind}${RESET}`);
       line2 += ` ${SEP} ${rp.join(' ')}`;
     }
     if (git.lastCommit) line2 += ` ${SEP} ${B}last:${RESET} ${F}${git.lastCommit}${RESET}`;
-    if (git.stashCount > 0) line2 += ` ${SEP} ${rgb(255, 200, 100)}stash:${git.stashCount}${RESET}`;
+    if (git.stashCount > 0) line2 += ` ${SEP} ${uiRgb(255, 200, 100)}stash:${git.stashCount}${RESET}`;
   }
 
   // Line 3: Pet name + mood message

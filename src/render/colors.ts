@@ -100,16 +100,36 @@ export function rgb(r: number, g: number, b: number): string {
   }
 }
 
+// ── UI dimming ──────────────────────────────────────
+// Everything EXCEPT the pet art renders through uiRgb/dimAnsi so the
+// tamagotchi keeps its full palette while the surrounding UI text sits
+// darker. CODACHI_UI_DIM (0..1, default 0.6) tunes how dark.
+
+const UI_DIM: number = (() => {
+  const v = parseFloat(process.env.CODACHI_UI_DIM ?? '');
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : 0.6;
+})();
+
+export function uiRgb(r: number, g: number, b: number): string {
+  return rgb(Math.round(r * UI_DIM), Math.round(g * UI_DIM), Math.round(b * UI_DIM));
+}
+
+/** Darken every truecolor foreground in an already-built escape string. */
+export function dimAnsi(seq: string): string {
+  return seq.replace(/38;2;(\d+);(\d+);(\d+)/g, (_m, r, g, b) =>
+    `38;2;${Math.round(+r * UI_DIM)};${Math.round(+g * UI_DIM)};${Math.round(+b * UI_DIM)}`);
+}
+
 export function getContextColor(percent: number): string {
-  if (percent >= 85) return rgb(255, 80, 80);
-  if (percent >= 70) return rgb(255, 200, 50);
-  return rgb(80, 220, 120);
+  if (percent >= 85) return uiRgb(255, 80, 80);
+  if (percent >= 70) return uiRgb(255, 200, 50);
+  return uiRgb(80, 220, 120);
 }
 
 export function getUsageColor(percent: number): string {
-  if (percent >= 90) return rgb(255, 80, 80);
-  if (percent >= 75) return rgb(200, 100, 255);
-  return rgb(100, 150, 255);
+  if (percent >= 90) return uiRgb(255, 80, 80);
+  if (percent >= 75) return uiRgb(200, 100, 255);
+  return uiRgb(100, 150, 255);
 }
 
 export function progressBar(percent: number, width: number, colorFn: (p: number) => string): string {
