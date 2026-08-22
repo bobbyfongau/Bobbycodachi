@@ -17,6 +17,7 @@ interface RenderInput {
   git: GitStatus | null;
   fiveHourUsage: import('../stdin.js').RateLimitInfo | null;
   sevenDayUsage: import('../stdin.js').RateLimitInfo | null;
+  modelScopedUsage: import('../stdin.js').ModelScopedUsage | null;
   contextVelocity: number;
   tokenSummary: string | null;
   sessionCost: number | null;
@@ -162,6 +163,7 @@ export function render(input: RenderInput): void {
     contextTimeRemaining: contextTimeRemaining ?? null,
     fiveHourUsage,
     sevenDayUsage,
+    modelScopedUsage: input.modelScopedUsage ?? null,
     sessionCost: input.sessionCost ?? null,
     colors,
   });

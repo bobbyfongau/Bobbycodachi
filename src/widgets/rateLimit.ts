@@ -36,10 +36,15 @@ export const rateLimit5hWidget: Widget = {
   },
 };
 
-/** 7-day rate limit widget */
+/** 7-day rate limit widget — leads with the model-scoped weekly (e.g. Fable) when known */
 export const rateLimit7dWidget: Widget = {
   id: 'rateLimit7d',
   render(ctx) {
-    return renderRateLimit('\u{1F4C5} 7d', 4, ctx.sevenDayUsage, ctx.colors);
+    const scoped = ctx.modelScopedUsage;
+    if (!scoped) return renderRateLimit('\u{1F4C5} 7d', 4, ctx.sevenDayUsage, ctx.colors);
+    const model = renderRateLimit(`\u{1F4C5} ${scoped.label}`, 4,
+      { percent: scoped.percent, resetsIn: null, paceDelta: null }, ctx.colors);
+    const seven = renderRateLimit('7d', 4, ctx.sevenDayUsage, ctx.colors);
+    return seven ? `${model} ${seven}` : model;
   },
 };

@@ -25,6 +25,7 @@ function makeRenderInput(overrides: Record<string, unknown> = {}) {
     git: null,
     fiveHourUsage: null as import('../stdin.js').RateLimitInfo | null,
     sevenDayUsage: null as import('../stdin.js').RateLimitInfo | null,
+    modelScopedUsage: null as import('../stdin.js').ModelScopedUsage | null,
     sessionCost: null,
     contextVelocity: 0,
     tokenSummary: null,

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import type { StdinData } from './types.js';
 
 export async function readStdin(): Promise<StdinData | null> {
@@ -105,6 +107,33 @@ function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${Math.round(n / 1000)}K`;
   return `${n}`;
+}
+
+export interface ModelScopedUsage {
+  /** Single-letter label, e.g. "F" for Fable */
+  label: string;
+  percent: number;
+}
+
+/**
+ * Model-scoped weekly usage (the "Fable 48% used" row in /usage). Not in the
+ * stdin payload — statusline.py maintains this cache from the OAuth usage API.
+ */
+export function getModelScopedUsage(): ModelScopedUsage | null {
+  try {
+    const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
+    const raw = readFileSync(`/tmp/claude-statusline-usage-${uid}.json`, 'utf8');
+    const scoped = (JSON.parse(raw) as { scoped?: Array<{ model?: string; percent?: number }> }).scoped;
+    if (!Array.isArray(scoped) || scoped.length === 0) return null;
+    const entry = scoped.find(s => s.model === 'Fable') ?? scoped[0];
+    if (typeof entry?.percent !== 'number' || !Number.isFinite(entry.percent)) return null;
+    return {
+      label: (entry.model || '?').slice(0, 1),
+      percent: Math.round(Math.min(100, Math.max(0, entry.percent))),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Returns session cost in USD, or null if Claude Code doesn't provide it. */

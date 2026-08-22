@@ -1,6 +1,6 @@
 import type { PetColors } from '../types.js';
 
-import type { RateLimitInfo } from '../stdin.js';
+import type { RateLimitInfo, ModelScopedUsage } from '../stdin.js';
 
 /** Context passed to every widget's render function */
 export interface WidgetContext {
@@ -11,6 +11,7 @@ export interface WidgetContext {
   contextTimeRemaining: string | null;
   fiveHourUsage: RateLimitInfo | null;
   sevenDayUsage: RateLimitInfo | null;
+  modelScopedUsage: ModelScopedUsage | null;
   sessionCost: number | null;
   colors: PetColors;
 }

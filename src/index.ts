@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readStdin, getContextPercent, getModelName, getFiveHourUsage, getSevenDayUsage, getTokenSummary, getSessionCost } from './stdin.js';
+import { readStdin, getContextPercent, getModelName, getFiveHourUsage, getSevenDayUsage, getModelScopedUsage, getTokenSummary, getSessionCost } from './stdin.js';
 import { getGitStatus } from './git.js';
 import { getAnimalType, getPetColors } from './identity.js';
 import { initSession, animTick, moodTick, sessionAgeTick, recordContextPercent, getContextVelocity, getContextTimeRemaining, getMemory, getRelationshipTier, didTierUpgrade } from './state.js';
@@ -83,6 +83,7 @@ async function main(): Promise<void> {
       git: cfg.showGit !== false ? getGitStatus(stdin.cwd) : null,
       fiveHourUsage: getFiveHourUsage(stdin),
       sevenDayUsage: getSevenDayUsage(stdin),
+      modelScopedUsage: getModelScopedUsage(),
       contextVelocity: cfg.showVelocity !== false ? getContextVelocity() : 0,
       tokenSummary: cfg.showTokens !== false ? getTokenSummary(stdin) : null,
       sessionCost: getSessionCost(stdin),

@@ -12,6 +12,7 @@ function makeCtx(overrides: Partial<WidgetContext> = {}): WidgetContext {
     contextTimeRemaining: null,
     fiveHourUsage: null,
     sevenDayUsage: null,
+    modelScopedUsage: null,
     sessionCost: null,
     colors: {
       body: rgb(255, 127, 80),
@@ -93,6 +94,28 @@ describe('rateLimit widgets', () => {
   it('returns empty when no data', () => {
     expect(WIDGET_REGISTRY.rateLimit5h.render(makeCtx())).toBe('');
     expect(WIDGET_REGISTRY.rateLimit7d.render(makeCtx())).toBe('');
+  });
+
+  it('leads 7d with the model-scoped weekly when known', () => {
+    const out = WIDGET_REGISTRY.rateLimit7d.render(makeCtx({
+      sevenDayUsage: { percent: 62, resetsIn: '2d21h', paceDelta: 3 },
+      modelScopedUsage: { label: 'F', percent: 48 },
+    }));
+    expect(out).toContain('F');
+    expect(out).toContain('48%');
+    expect(out).toContain('7d');
+    expect(out).toContain('62%');
+    expect(out).toContain('~2d21h');
+    expect(out.indexOf('48%')).toBeLessThan(out.indexOf('7d'));
+  });
+
+  it('renders model-scoped weekly alone when 7d data is missing', () => {
+    const out = WIDGET_REGISTRY.rateLimit7d.render(makeCtx({
+      modelScopedUsage: { label: 'F', percent: 48 },
+    }));
+    expect(out).toContain('F');
+    expect(out).toContain('48%');
+    expect(out).not.toContain('7d');
   });
 });
 

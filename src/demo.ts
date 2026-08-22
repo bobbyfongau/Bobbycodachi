@@ -74,6 +74,7 @@ export async function runDemo(): Promise<void> {
       },
       fiveHourUsage: { percent: Math.round(step.contextPercent * 0.4), resetsIn: '4h12m', paceDelta: step.contextPercent > 50 ? Math.round(step.contextPercent * 0.1) : -3 },
       sevenDayUsage: { percent: Math.round(step.contextPercent * 0.3), resetsIn: '5d8h', paceDelta: step.contextPercent > 60 ? 4 : -2 },
+      modelScopedUsage: { label: 'F', percent: Math.round(step.contextPercent * 0.25) },
       contextVelocity: step.velocity,
       tokenSummary: `${Math.round(step.contextPercent * 10)}K/1.0M`,
       sessionCost: step.contextPercent * 0.02,
