@@ -30,6 +30,8 @@ interface RenderInput {
   petName: string;
   contextTimeRemaining: string | null;
   tierUpgraded: boolean;
+  /** false = no pet art, no mood line (default true) */
+  showPet?: boolean;
 }
 
 function visualLength(str: string): number {
@@ -128,20 +130,21 @@ export function render(input: RenderInput): void {
     }
   }
 
-  const frame = getAnimalFrame(animalType, size, animation, animTick);
-  const petLines = frame.lines.map(l => colorizePetLine(l, colors));
-  const petW = frame.width + 2;
+  const showPet = input.showPet !== false;
+  const frame = showPet ? getAnimalFrame(animalType, size, animation, animTick) : null;
+  const petLines = frame ? frame.lines.map(l => colorizePetLine(l, colors)) : [];
+  const petW = frame ? frame.width + 2 : 0;
 
   const { contextVelocity, relationshipTier, sessionNumber, petName, contextTimeRemaining } = input;
 
-  const mood = getMoodMessage({
+  const mood = showPet ? getMoodMessage({
     contextPercent, size, animation, animalType, git,
     fiveHourUsage: fiveHourUsage?.percent ?? null,
     contextVelocity,
     relationshipTier, sessionNumber, moodTick,
     sessionTick: input.sessionTick,
     eventContext, tierUpgraded,
-  });
+  }) : '';
 
   // Info text takes a darkened palette; the pet art (colorizePetLine above)
   // keeps the full-brightness colors.
@@ -197,8 +200,9 @@ export function render(input: RenderInput): void {
     if (git.stashCount > 0) line2 += ` ${SEP} ${uiRgb(255, 200, 100)}stash:${git.stashCount}${RESET}`;
   }
 
-  // Line 3: Pet name + mood message
-  const line3 = `${A}${petName}${RESET} ${F}${mood}${RESET}`;
+  // Line 3: Pet name + mood message (empty when the pet is hidden — the
+  // statusline wrapper folds cost/token metrics into this line)
+  const line3 = showPet ? `${A}${petName}${RESET} ${F}${mood}${RESET}` : '';
 
   // Compose — output pet on left, info on right
   const infoWidth = Math.max(1, termWidth - petW);

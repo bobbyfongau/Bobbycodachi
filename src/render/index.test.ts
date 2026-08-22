@@ -106,6 +106,15 @@ describe('render', () => {
     expect(logOutput[0]).toContain('^3%/m');
   });
 
+  it('hides pet art and mood line when showPet is false', () => {
+    render(makeRenderInput({ showPet: false }));
+    expect(logOutput).toHaveLength(3);
+    // Line 1 starts with info directly (no pet column indent)
+    expect(logOutput[0]).toContain('%');
+    // Line 3 is visually empty (no pet name / mood)
+    expect(logOutput[2].replace(/\x1b\[[0-9;]*m/g, '').trim()).toBe('');
+  });
+
   it('shows five hour usage bar', () => {
     render(makeRenderInput({
       fiveHourUsage: { percent: 40, resetsIn: '2h30m', paceDelta: 5 },

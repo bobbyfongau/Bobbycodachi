@@ -66,14 +66,19 @@ async function main(): Promise<void> {
     }
 
     loadConfig();
-    initSession(stdin.transcript_path, stdin.session_id);
+    const petEnabled = getConfig().showPet !== false;
+    // Pet disabled = no state/event tracking at all: no session state writes,
+    // no memory, no mood. Velocity depends on that state, so it goes too.
+    if (petEnabled) initSession(stdin.transcript_path, stdin.session_id);
 
     const cfg = getConfig();
     const contextPercent = getContextPercent(stdin);
-    recordContextPercent(contextPercent);
+    if (petEnabled) recordContextPercent(contextPercent);
 
     const animalType = getAnimalType();
     const petName = cfg.name || getAnimalName(animalType);
+    const NO_EVENT = { category: null, freshness: 'none', detail: '',
+      consecutiveFailures: 0, sessionEditCount: 0, sessionActionCount: 0 } as const;
 
     render({
       contextPercent,
@@ -84,18 +89,19 @@ async function main(): Promise<void> {
       fiveHourUsage: getFiveHourUsage(stdin),
       sevenDayUsage: getSevenDayUsage(stdin),
       modelScopedUsage: getModelScopedUsage(),
-      contextVelocity: cfg.showVelocity !== false ? getContextVelocity() : 0,
+      contextVelocity: petEnabled && cfg.showVelocity !== false ? getContextVelocity() : 0,
       tokenSummary: cfg.showTokens !== false ? getTokenSummary(stdin) : null,
       sessionCost: getSessionCost(stdin),
-      relationshipTier: getRelationshipTier(),
-      sessionNumber: getMemory().totalSessions,
+      relationshipTier: petEnabled ? getRelationshipTier() : 'stranger',
+      sessionNumber: petEnabled ? getMemory().totalSessions : 0,
       animTick: animTick(cfg.animationSpeed),
       moodTick: moodTick(),
-      sessionTick: sessionAgeTick(),
-      eventContext: getEventContext(),
+      sessionTick: petEnabled ? sessionAgeTick() : 0,
+      eventContext: petEnabled ? getEventContext() : NO_EVENT,
       petName,
-      contextTimeRemaining: cfg.showVelocity !== false ? getContextTimeRemaining(contextPercent) : null,
-      tierUpgraded: didTierUpgrade(),
+      contextTimeRemaining: petEnabled && cfg.showVelocity !== false ? getContextTimeRemaining(contextPercent) : null,
+      tierUpgraded: petEnabled ? didTierUpgrade() : false,
+      showPet: petEnabled,
     });
   } catch (error) {
     logError('index.main', error);

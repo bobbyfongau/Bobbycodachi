@@ -13,6 +13,7 @@ export interface CodachiConfig {
   showTokens?: boolean;      // show token summary "550K/1M" (default: true)
   showVelocity?: boolean;    // show context burn speed (default: true)
   showGit?: boolean;         // show git info line (default: true)
+  showPet?: boolean;         // show the pet + mood line; false also skips state/event tracking (default: true)
   animationSpeed?: number;   // seconds per frame (default: 1.5)
 }
 
@@ -82,7 +83,7 @@ export function validateConfig(raw: unknown, source = 'config'): CodachiConfig {
     logWarn(source, `widgets must be an array, got ${typeof r.widgets}`);
   }
 
-  for (const key of ['showTokens', 'showVelocity', 'showGit'] as const) {
+  for (const key of ['showTokens', 'showVelocity', 'showGit', 'showPet'] as const) {
     if (r[key] !== undefined) {
       if (typeof r[key] === 'boolean') out[key] = r[key] as boolean;
       else logWarn(source, `${key} must be a boolean, got ${typeof r[key]}`);
@@ -99,7 +100,7 @@ export function validateConfig(raw: unknown, source = 'config'): CodachiConfig {
 
   // Surface unknown top-level keys to help users catch typos.
   const knownKeys = new Set(['name', 'animal', 'palette', 'widgets',
-    'showTokens', 'showVelocity', 'showGit', 'animationSpeed']);
+    'showTokens', 'showVelocity', 'showGit', 'showPet', 'animationSpeed']);
   for (const k of Object.keys(r)) {
     if (!knownKeys.has(k)) logWarn(source, `unknown config key "${k}"`);
   }
